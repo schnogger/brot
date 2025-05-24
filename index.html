@@ -45,6 +45,7 @@ const Complex=(()=>{
 })();
 /* palette.js */
 const Palette=(()=>{
+  /** @type {Record<string,string[]>} predefined colour stops */
   const presets={
     classic:['#000','#0ff','#00f','#f00','#fff'],
     psychedelic:['#000','#ff0','#f0f','#0ff','#fff'],
@@ -107,6 +108,7 @@ const Renderer=(()=>{
       if(ev.data.type==='init'){ctx=ev.data.canvas.getContext('2d');w=ev.data.canvas.width;h=ev.data.canvas.height;}
       else if(ev.data.type==='render') render(ev.data,ctx,w,h);
     };
+    /** Render function used inside worker */
     const render=(d,ctx,w,h)=>{
       const img=ctx.createImageData(w,h),data=img.data,pal=d.palette;
       for(let py=0;py<h;py++){

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mandelbrot Viewer</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#fff;font-family:sans-serif}
+#fractalCanvas{position:absolute;top:0;left:0;width:100%;height:100%;display:block}
+#controlPanel{position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.4);padding:10px;border-radius:4px;display:flex;flex-direction:column;gap:8px;font-size:14px;max-width:240px}
+label{display:flex;justify-content:space-between;align-items:center}
+input[type=range]{width:120px}
+select,button{width:120px}
+.hidden{display:none}
+#help{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,0.6);padding:8px;border-radius:4px;max-width:240px;font-size:12px}
+</style>
+</head>
+<body>
+<canvas id="fractalCanvas" aria-label="Mandelbrot set"></canvas>
+<div id="controlPanel">
+<label aria-label="Iterations">Iterations <input id="iterSlider" type="range" min="5" max="13" value="8"></label>
+<label aria-label="Palette">Palette <select id="paletteSelect">
+<option value="classic">Classic</option>
+<option value="psychedelic">Psychedelic</option>
+<option value="pastel">Pastel</option>
+</select></label>
+<label aria-label="Animate colours"><input type="checkbox" id="animateToggle"> Animate Colours</label>
+<label aria-label="Animation speed">Speed <input id="speedSlider" type="range" min="1" max="100" value="20"></label>
+<label aria-label="Auto iterations"><input type="checkbox" id="autoIterToggle" checked> Auto Iter</label>
+<button id="resetBtn">Reset View</button>
+<label aria-label="Bookmarks">Bookmarks <select id="bookmarkSelect"></select></label>
+<button id="saveBookmarkBtn">Save Current</button>
+<label aria-label="Famous spots">Famous <select id="famousSelect"></select></label>
+</div>
+<div id="help" class="hidden">H: toggle panel<br>R: reset<br>B: bookmark<br>Arrows: pan<br>?: help</div>
+<script type="module">
+/* complex.js */
+const Complex=(()=>{
+  /** @typedef {{re:number,im:number}} Complex */
+  /** Add two complex numbers. */
+  const add=(a,b)=>({re:a.re+b.re,im:a.im+b.im});
+  /** Square a complex number. */
+  const square=z=>({re:z.re*z.re-z.im*z.im,im:2*z.re*z.im});
+  return{add,square};
+})();
+/* palette.js */
+const Palette=(()=>{
+  const presets={
+    classic:['#000','#0ff','#00f','#f00','#fff'],
+    psychedelic:['#000','#ff0','#f0f','#0ff','#fff'],
+    pastel:['#000','#fdc','#cdf','#dfc','#cfd']
+  };
+  const cache={};
+  /** Build 256 color gradient. */
+  const build=stops=>{
+    const g=[];
+    for(let i=0;i<stops.length-1;i++){
+      const c1=hex(stops[i]),c2=hex(stops[i+1]);
+      for(let j=0;j<64;j++){
+        const t=j/64;
+        g.push([mix(c1[0],c2[0],t),mix(c1[1],c2[1],t),mix(c1[2],c2[2],t)]);
+      }
+    }
+    return g;
+  };
+  const hex=h=>h.length===4?[
+    parseInt(h[1]+h[1],16),parseInt(h[2]+h[2],16),parseInt(h[3]+h[3],16)
+  ]:[
+    parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)
+  ];
+  const mix=(a,b,t)=>Math.round(a+(b-a)*t);
+  const get=name=>{if(!cache[name]) cache[name]=build(presets[name]); return cache[name];};
+  return{get};
+})();
+/* renderer.js */
+const Renderer=(()=>{
+  const canvas=document.getElementById('fractalCanvas');
+  let width=0,height=0,ctx;
+  let centerX=-0.5,centerY=0,scale=4;
+  let baseIterExp=8,maxIter=256;
+  let palette=Palette.get('classic');
+  let hueOffset=0,animate=false,animSpeed=0.02,autoIter=true;
+  let worker=null;
+  const dpi=window.devicePixelRatio||1;
+  /** Resize canvas and trigger render */
+  const resize=()=>{
+    width=window.innerWidth;height=window.innerHeight;
+    canvas.width=width*dpi;canvas.height=height*dpi;
+    canvas.style.width=width+'px';canvas.style.height=height+'px';
+    ctx=canvas.getContext('2d');
+    render();
+  };
+  const updateIterations=exp=>{baseIterExp=+exp;computeMaxIter();render();};
+  const computeMaxIter=()=>{maxIter=2**baseIterExp;if(autoIter)maxIter=Math.floor(maxIter*Math.log2(4/scale+2));};
+  const setPalette=name=>{palette=Palette.get(name);render();};
+  const toggleAnimate=val=>{animate=val;};
+  const setSpeed=v=>{animSpeed=v/50;};
+  const toggleAuto=v=>{autoIter=v;computeMaxIter();render();};
+  const setView=(cx,cy,s)=>{centerX=cx;centerY=cy;scale=s;computeMaxIter();render();};
+  const reset=()=>setView(-0.5,0,4);
+  const createWorker=()=>{
+    const wCode=`self.onmessage=${workerMain.toString()}`;
+    return new Worker(URL.createObjectURL(new Blob([wCode],{type:'text/javascript'})));
+  };
+  function workerMain(e){
+    let ctx,w,h;self.onmessage=ev=>{
+      if(ev.data.type==='init'){ctx=ev.data.canvas.getContext('2d');w=ev.data.canvas.width;h=ev.data.canvas.height;}
+      else if(ev.data.type==='render') render(ev.data,ctx,w,h);
+    };
+    const render=(d,ctx,w,h)=>{
+      const img=ctx.createImageData(w,h),data=img.data,pal=d.palette;
+      for(let py=0;py<h;py++){
+        const y=d.cy+(py-h/2)/h*d.scale;
+        for(let px=0;px<w;px++){
+          const x=d.cx+(px-w/2)/h*d.scale;
+          let zx=0,zy=0,i=0;
+          while(zx*zx+zy*zy<4&&i<d.max){const xt=zx*zx-zy*zy+x;zy=2*zx*zy+y;zx=xt;i++;}
+          const idx=(py*w+px)*4;
+          if(i==d.max){data[idx]=data[idx+1]=data[idx+2]=0;data[idx+3]=255;}
+          else{
+            let mu=i-Math.log(Math.log(zx*zx+zy*zy))/Math.log(2);
+            mu=(mu+d.hue)%pal.length;const c=pal[Math.floor(mu)];
+            data[idx]=c[0];data[idx+1]=c[1];data[idx+2]=c[2];data[idx+3]=255;
+          }
+        }
+      }
+      ctx.putImageData(img,0,0);
+      self.postMessage('done');
+    };
+  }
+  const render=()=>{
+    computeMaxIter();
+    if(!worker && window.OffscreenCanvas){worker=createWorker();const off=canvas.transferControlToOffscreen();worker.postMessage({type:'init',canvas:off},{transfer:[off]});}
+    if(worker){worker.postMessage({type:'render',cx:centerX,cy:centerY,scale,max:maxIter,palette,hue:hueOffset});}
+    else draw(ctx,canvas.width,canvas.height,centerX,centerY,scale,maxIter,palette,hueOffset);
+  };
+  const draw=(ctx,w,h,cx,cy,s,m,pal,hue)=>{
+    const img=ctx.createImageData(w,h),d=img.data;
+    for(let py=0;py<h;py++){
+      const y=cy+(py-h/2)/h*s;
+      for(let px=0;px<w;px++){
+        const x=cx+(px-w/2)/h*s;
+        let zx=0,zy=0,i=0;
+        while(zx*zx+zy*zy<4&&i<m){const xt=zx*zx-zy*zy+x;zy=2*zx*zy+y;zx=xt;i++;}
+        const idx=(py*w+px)*4;
+        if(i==m){d[idx]=d[idx+1]=d[idx+2]=0;d[idx+3]=255;}
+        else{let mu=i-Math.log(Math.log(zx*zx+zy*zy))/Math.log(2);mu=(mu+hue)%pal.length;const c=pal[Math.floor(mu)];d[idx]=c[0];d[idx+1]=c[1];d[idx+2]=c[2];d[idx+3]=255;}
+      }
+    }
+    ctx.putImageData(img,0,0);
+  };
+  const zoom=(f,x,y)=>{const dx=(x-width/2)/height*scale,dy=(y-height/2)/height*scale;centerX+=dx*(1-1/f);centerY+=dy*(1-1/f);scale/=f;render();};
+  const pan=(dx,dy)=>{centerX-=dx/height*scale;centerY-=dy/height*scale;render();};
+  const startLoop=()=>{if(animate){hueOffset=(hueOffset+animSpeed)%palette.length;render();}requestAnimationFrame(startLoop);};
+  requestAnimationFrame(startLoop);
+  window.addEventListener('resize',resize);resize();
+  return{canvas,zoom,pan,updateIterations,setPalette,toggleAnimate,setSpeed,toggleAuto,reset,setView,get centerX(){return centerX;},get centerY(){return centerY;},get scale(){return scale;}};
+})();
+/* ui.js */
+const UI=(()=>{
+  const iterSlider=document.getElementById('iterSlider');
+  const paletteSelect=document.getElementById('paletteSelect');
+  const animateToggle=document.getElementById('animateToggle');
+  const speedSlider=document.getElementById('speedSlider');
+  const autoIterToggle=document.getElementById('autoIterToggle');
+  const resetBtn=document.getElementById('resetBtn');
+  const bookmarkSelect=document.getElementById('bookmarkSelect');
+  const saveBookmarkBtn=document.getElementById('saveBookmarkBtn');
+  const famousSelect=document.getElementById('famousSelect');
+  const panel=document.getElementById('controlPanel');
+  const help=document.getElementById('help');
+  const c=Renderer.canvas;
+  let panning=false,px=0,py=0;
+  let bookmarks=JSON.parse(localStorage.getItem('mandelBookmarks')||'[]');
+  const famous=[{label:'Seahorse Valley',centerX:-0.75,centerY:0.1,scale:0.05},{label:'Elephant Valley',centerX:0.285,centerY:0.01,scale:0.05},{label:'Triple Spiral',centerX:-0.088,centerY:0.654,scale:0.05}];
+  const fill=(sel,list)=>{sel.innerHTML='';list.forEach((b,i)=>{const o=document.createElement('option');o.value=i;o.textContent=b.label;sel.appendChild(o);});};
+  const updateBookmarks=()=>fill(bookmarkSelect,bookmarks);
+  fill(famousSelect,famous);updateBookmarks();
+  iterSlider.addEventListener('input',()=>Renderer.updateIterations(iterSlider.value));
+  paletteSelect.addEventListener('change',()=>Renderer.setPalette(paletteSelect.value));
+  animateToggle.addEventListener('change',()=>Renderer.toggleAnimate(animateToggle.checked));
+  speedSlider.addEventListener('input',()=>Renderer.setSpeed(speedSlider.value));
+  autoIterToggle.addEventListener('change',()=>Renderer.toggleAuto(autoIterToggle.checked));
+  resetBtn.addEventListener('click',Renderer.reset);
+  saveBookmarkBtn.addEventListener('click',()=>{bookmarks.push({centerX:Renderer.centerX,centerY:Renderer.centerY,scale:Renderer.scale,label:'Bookmark '+bookmarks.length});localStorage.setItem('mandelBookmarks',JSON.stringify(bookmarks));updateBookmarks();});
+  bookmarkSelect.addEventListener('change',()=>{const b=bookmarks[bookmarkSelect.value];if(b)Renderer.setView(b.centerX,b.centerY,b.scale);});
+  famousSelect.addEventListener('change',()=>{const f=famous[famousSelect.value];if(f)Renderer.setView(f.centerX,f.centerY,f.scale);});
+  c.addEventListener('wheel',e=>{e.preventDefault();Renderer.zoom(e.deltaY<0?1.2:0.8,e.offsetX,e.offsetY);},{passive:false});
+  c.addEventListener('mousedown',e=>{panning=true;px=e.clientX;py=e.clientY;});
+  window.addEventListener('mousemove',e=>{if(panning){Renderer.pan(e.clientX-px,e.clientY-py);px=e.clientX;py=e.clientY;}});
+  window.addEventListener('mouseup',()=>panning=false);
+  window.addEventListener('keydown',e=>{
+    if(e.key==='h'||e.key==='H')panel.classList.toggle('hidden');
+    else if(e.key==='r'||e.key==='R')Renderer.reset();
+    else if(e.key==='b'||e.key==='B')saveBookmarkBtn.click();
+    else if(e.key==='?')help.classList.toggle('hidden');
+    else if(e.key==='ArrowUp')Renderer.pan(0,50);
+    else if(e.key==='ArrowDown')Renderer.pan(0,-50);
+    else if(e.key==='ArrowLeft')Renderer.pan(50,0);
+    else if(e.key==='ArrowRight')Renderer.pan(-50,0);
+    else if(e.key==='+')Renderer.zoom(1.2,width/2,height/2);
+    else if(e.key==='-')Renderer.zoom(0.8,width/2,height/2);
+  });
+})();
+</script>
+<!-- README
+Extension ideas:
+- Julia set viewer
+- Export view to PNG
+- Orbit trap colouring
+-->
+</body>
+</html>

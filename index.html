@@ -133,17 +133,17 @@ const Renderer=(()=>{
     if(worker){worker.postMessage({type:'render',cx:centerX,cy:centerY,scale,max:maxIter,palette,hue:hueOffset});}
     else draw(ctx,canvas.width,canvas.height,centerX,centerY,scale,maxIter,palette,hueOffset);
   };
-  const draw=(ctx,w,h,cx,cy,s,m,pal,h)=>{
-    const img=ctx.createImageData(w,h),d=img.data;
-    for(let py=0;py<h;py++){
-      const y=cy+(py-h/2)/h*s;
+  const draw=(ctx,w,height,cx,cy,s,m,pal,hue)=>{
+    const img=ctx.createImageData(w,height),d=img.data;
+    for(let py=0;py<height;py++){
+      const y=cy+(py-height/2)/height*s;
       for(let px=0;px<w;px++){
-        const x=cx+(px-w/2)/h*s;
+        const x=cx+(px-w/2)/height*s;
         let zx=0,zy=0,i=0;
         while(zx*zx+zy*zy<4&&i<m){const xt=zx*zx-zy*zy+x;zy=2*zx*zy+y;zx=xt;i++;}
         const idx=(py*w+px)*4;
         if(i==m){d[idx]=d[idx+1]=d[idx+2]=0;d[idx+3]=255;}
-        else{let mu=i-Math.log(Math.log(zx*zx+zy*zy))/Math.log(2);mu=(mu+h)%pal.length;const c=pal[Math.floor(mu)];d[idx]=c[0];d[idx+1]=c[1];d[idx+2]=c[2];d[idx+3]=255;}
+        else{let mu=i-Math.log(Math.log(zx*zx+zy*zy))/Math.log(2);mu=(mu+hue)%pal.length;const c=pal[Math.floor(mu)];d[idx]=c[0];d[idx+1]=c[1];d[idx+2]=c[2];d[idx+3]=255;}
       }
     }
     ctx.putImageData(img,0,0);

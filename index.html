@@ -105,6 +105,7 @@ const Palette=(()=>{
    * @param {string} name
    * @returns {number[][]}
    */
+  
   const get=name=>{if(!cache[name]) cache[name]=build(presets[name]); return cache[name];};
   return{get};
 })();
@@ -154,6 +155,7 @@ const Renderer=(()=>{
   /** Reset view to default */
   const reset=()=>{centerX=-0.5;centerY=0;scale=4;computeMaxIter();render();};
   /** Create rendering Web Worker */
+
   const createWorker=()=>{
     const wCode=`self.onmessage=${workerMain.toString()}`;
     return new Worker(URL.createObjectURL(new Blob([wCode],{type:'text/javascript'})));
